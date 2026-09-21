@@ -70,11 +70,11 @@ class Server(object):
         self.new_clients = []
         self.eval_new_clients = False
         self.fine_tuning_epoch = args.fine_tuning_epoch
+        self.current_round = 0
         
         if self.args.log:
             args.run_name = f"{args.algorithm}__{args.dataset}__{args.num_clients}__{int(time.time())}"
             
-            self.current_round = 0
             self.save_dir = f"runs/{args.run_name}"
             self.writer = SummaryWriter(self.save_dir)
             self.writer.add_text(
@@ -269,6 +269,8 @@ class Server(object):
         else:
             acc.append(test_acc)
         
+        self.rs_test_auc.append(test_auc)
+
         if loss == None:
             self.rs_train_loss.append(train_loss)
         else:
