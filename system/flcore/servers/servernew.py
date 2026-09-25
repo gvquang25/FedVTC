@@ -8,7 +8,6 @@ from collections import defaultdict
 import torch
 import wandb
 
-
 # Định danh kế thừa ServerBase
 ServerBase = Server
 
