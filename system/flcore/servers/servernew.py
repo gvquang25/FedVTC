@@ -6,6 +6,7 @@ import time
 import numpy as np
 from collections import defaultdict
 import torch
+import wandb
 
 # Định danh kế thừa ServerBase
 ServerBase = Server
@@ -14,6 +15,9 @@ ServerBase = Server
 class FedNew(Server):
     def __init__(self, args, times):
         super().__init__(args, times)
+
+        if not hasattr(self, 'current_round'):
+            self.current_round = 0
 
         # select slow clients
         self.set_slow_clients()
@@ -60,6 +64,12 @@ class FedNew(Server):
         print(max(self.rs_test_acc))
         print(sum(self.Budget[1:]) / len(self.Budget[1:]))
 
+        if getattr(self.args, 'log', False) and len(self.rs_test_acc) > 0:
+            wandb.log({
+                "charts/best_acc": max(self.rs_test_acc),
+                "charts/mean_round_time": sum(self.Budget[1:]) / max(len(self.Budget[1:]), 1)
+            })
+
         self.save_results()
 
     def send_protos(self):
@@ -90,8 +100,10 @@ class FedNew(Server):
         stats_train = self.train_metrics()
 
         test_acc = sum(stats[2]) * 1.0 / max(sum(stats[1]), 1)
+        test_auc = sum(stats[3]) * 1.0 / max(sum(stats[1]), 1)
         train_loss = sum(stats_train[2]) * 1.0 / max(sum(stats_train[1]), 1)
         accs = [a / max(n, 1) for a, n in zip(stats[2], stats[1])]
+        aucs = [a / max(n, 1) for a, n in zip(stats[3], stats[1])]
 
         if acc is None:
             self.rs_test_acc.append(test_acc)
@@ -105,7 +117,34 @@ class FedNew(Server):
 
         print("Averaged Train Loss: {:.4f}".format(train_loss))
         print("Averaged Test Accurancy: {:.4f}".format(test_acc))
-        print("Std Test Accurancy: {:.4f}".format(np.std(accs)))
+        print("Averaged Test AUC: {:.4f}".format(test_auc))
+
+        test_acc_std = np.std(accs).item()
+        test_auc_std = np.std(aucs).item()
+        print("Std Test Accurancy: {:.4f}".format(test_acc_std))
+        print("Std Test AUC: {:.4f}".format(test_auc_std))
+
+        if getattr(self.args, 'log', False):
+            if hasattr(self, 'writer') and self.writer is not None:
+                self.writer.add_scalar("charts/train_loss", train_loss, self.current_round)
+                self.writer.add_scalar("charts/test_acc", test_acc, self.current_round)
+                self.writer.add_scalar("charts/test_auc", test_auc, self.current_round)
+                self.writer.add_scalar("charts/test_acc_std", test_acc_std, self.current_round)
+                self.writer.add_scalar("charts/test_auc_std", test_auc_std, self.current_round)
+
+            wandb_log_dict = {
+                "charts/train_loss": train_loss,
+                "charts/test_acc": test_acc,
+                "charts/test_auc": test_auc,
+                "charts/test_acc_std": test_acc_std,
+                "charts/test_auc_std": test_auc_std,
+            }
+            if hasattr(self, 'global_stats') and self.global_stats:
+                wandb_log_dict["charts/num_global_classes"] = len(self.global_stats)
+
+            wandb.log(wandb_log_dict, step=self.current_round)
+
+        self.current_round += 1
 
     # Method alias hỗ trợ gọi trực tiếp
     def proto_aggregation(self, local_stats_dict=None):

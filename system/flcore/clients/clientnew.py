@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import time
+import wandb
 from flcore.clients.clientbase import Client
 
 # Định danh kế thừa ClientBase
@@ -17,6 +18,8 @@ class clientNew(Client):
         self.global_prototypes = {}
         self.global_stds = {}
         self.local_stats = {}
+        self.loss_mse = nn.MSELoss()
+        self.lamda = getattr(args, 'lamda', 1.0)
 
     def extract_local_stats(self, dataloader=None):
         """
@@ -119,10 +122,10 @@ class clientNew(Client):
 
     def train(self):
         """
-        Quy trình Client trong round:
-        1. Huấn luyện cục bộ (Local Training) sử dụng self.global_prototypes và self.global_stds nhận từ Server.
-        2. Sau khi huấn luyện xong, tự động trích xuất lại Prototype & STD mới (self.extract_local_stats())
-           để gửi trả về Server ở round tiếp theo.
+        Vòng lặp huấn luyện chuẩn:
+        1. Huấn luyện cục bộ: tính loss phân loại chuẩn loss = self.loss(output, y) từ output = self.model(x).
+        2. Tạm thời không can thiệp loss với prototype/std để đảm bảo môi trường sạch cho thử nghiệm.
+        3. Sau khi huấn luyện, gọi self.extract_local_stats(trainloader) để cập nhật thống kê cục bộ gửi lên Server.
         """
         trainloader = self.load_train_data()
         start_time = time.time()
@@ -133,33 +136,37 @@ class clientNew(Client):
         if self.train_slow:
             max_local_steps = np.random.randint(1, max_local_steps // 2)
 
-        # =========================================================================
-        # TODO: ĐIỂM CHÈN THUẬT TOÁN HUẤN LUYỆN DÙNG GLOBAL_PROTOTYPES & GLOBAL_STDS
-        # Cả 2 biến đã được receive_global_stats/set_protos chuẩn bị sẵn trên self.device:
-        #   - self.global_prototypes: {class_c: Tensor(feature_dim,)}
-        #   - self.global_stds:       {class_c: Tensor(feature_dim,)}
-        #
-        # Ví dụ khung huấn luyện cơ bản:
-        # for step in range(max_local_steps):
-        #     for i, (x, y) in enumerate(trainloader):
-        #         if type(x) == type([]):
-        #             x[0] = x[0].to(self.device)
-        #         else:
-        #             x = x.to(self.device)
-        #         y = y.to(self.device)
-        #         if self.train_slow:
-        #             time.sleep(0.1 * np.abs(np.random.rand()))
-        #
-        #         rep = self.model.base(x)
-        #         output = self.model.head(rep)
-        #         loss = self.loss(output, y)
-        #
-        #         # --> CHÈN THUẬT TOÁN / LOSS VỚI self.global_prototypes VÀ self.global_stds TẠI ĐÂY <--
-        #
-        #         self.optimizer.zero_grad()
-        #         loss.backward()
-        #         self.optimizer.step()
-        # =========================================================================
+        losses = []
+        for step in range(max_local_steps):
+            for i, (x, y) in enumerate(trainloader):
+                if type(x) == type([]):
+                    x[0] = x[0].to(self.device)
+                else:
+                    x = x.to(self.device)
+                y = y.to(self.device)
+
+                if self.train_slow:
+                    time.sleep(0.1 * np.abs(np.random.rand()))
+
+                output = self.model(x)
+                loss = self.loss(output, y)
+
+                self.optimizer.zero_grad()
+                loss.backward()
+                self.optimizer.step()
+
+                losses.append(loss.item())
+
+        # Ghi log chỉ số client lên WandB nếu cờ log được kích hoạt
+        if getattr(self.args, 'log', False) and len(losses) > 0:
+            avg_loss = float(np.mean(losses))
+            try:
+                if wandb.run is not None:
+                    wandb.log({
+                        f"clients/client_{self.id}_train_loss": avg_loss,
+                    }, commit=False)
+            except Exception:
+                pass
 
         # Tự động trích xuất và cập nhật local stats (mean, std, count) mới nhất sau khi train
         # để gửi trả về Server ở round kế tiếp

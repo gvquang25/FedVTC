@@ -39,6 +39,7 @@ from flcore.servers.serverdistill import FedDistill
 from flcore.servers.serverala import FedALA
 from flcore.servers.serverpac_rec import PAC_REC
 from flcore.servers.serverpac import FedPAC
+from flcore.servers.servernew import FedNew
 
 from flcore.trainmodel.models import *
 
@@ -326,6 +327,12 @@ def run(args):
 
         elif args.algorithm == "FedALA":
             server = FedALA(args, i)
+
+        elif args.algorithm in ["FedNew", "fednew", "New", "new"]:
+            args.head = copy.deepcopy(args.model.fc)
+            args.model.fc = nn.Identity()
+            args.model = BaseHeadSplit(args.model, args.head)
+            server = FedNew(args, i)
             
         else:
             raise NotImplementedError
