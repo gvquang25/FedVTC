@@ -1,5 +1,5 @@
 import time
-from system.flcore.clients.clientlag import clientFedLag
+from flcore.clients.clientlag import clientFedLag
 from flcore.servers.serverbase import Server
 from threading import Thread
 from collections import OrderedDict

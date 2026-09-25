@@ -17,6 +17,7 @@ import numpy as np
 from torch.utils.tensorboard import SummaryWriter
 import wandb
 
+
 class Server(object):
     def __init__(self, args, times):
         # Set up the main attributes
@@ -69,11 +70,11 @@ class Server(object):
         self.new_clients = []
         self.eval_new_clients = False
         self.fine_tuning_epoch = args.fine_tuning_epoch
+        self.current_round = 0
         
         if self.args.log:
             args.run_name = f"{args.algorithm}__{args.dataset}__{args.num_clients}__{int(time.time())}"
             
-            self.current_round = 0
             self.save_dir = f"runs/{args.run_name}"
             self.writer = SummaryWriter(self.save_dir)
             self.writer.add_text(
@@ -81,9 +82,9 @@ class Server(object):
                 "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
             )
             
+            # Khởi tạo phiên WandB
             wandb.init(
                 project="PFLA",
-                entity="scalemind",
                 config=args,
                 name=args.run_name,
                 force=True
@@ -268,6 +269,8 @@ class Server(object):
         else:
             acc.append(test_acc)
         
+        self.rs_test_auc.append(test_auc)
+
         if loss == None:
             self.rs_train_loss.append(train_loss)
         else:
@@ -282,9 +285,7 @@ class Server(object):
         print("Std Test Accurancy: {:.4f}".format(test_acc_std))
         print("Std Test AUC: {:.4f}".format(test_auc_std))
         
-        
         if self.args.log:
-        
             self.writer.add_scalar("charts/train_loss", train_loss, self.current_round)
             wandb.log({"charts/train_loss": train_loss}, step=self.current_round)
             
@@ -333,7 +334,6 @@ class Server(object):
         return True
 
     def call_dlg(self, R):
-        # items = []
         cnt = 0
         psnr_val = 0
         for cid, client_model in zip(self.uploaded_ids, self.uploaded_models):
@@ -361,15 +361,11 @@ class Server(object):
             if d is not None:
                 psnr_val += d
                 cnt += 1
-            
-            # items.append((client_model, origin_grad, target_inputs))
                 
         if cnt > 0:
             print('PSNR value is {:.2f} dB'.format(psnr_val / cnt))
         else:
             print('PSNR error')
-
-        # self.save_item(items, f'DLG_{R}')
 
     def set_new_clients(self, clientObj):
         for i in range(self.num_clients, self.num_clients + self.num_new_clients):
@@ -433,6 +429,7 @@ class Server(object):
 
         dot_value = torch.stack(dot_value).view(-1)
         return dot_value
+
     def cos(self, t1, t2):
         t1 = F.normalize(t1, dim=0)
         t2 = F.normalize(t2, dim=0)
@@ -442,19 +439,12 @@ class Server(object):
         return dot
     
     def aggregate_parameters_recon(self, L2):
-        # L2: 1 list of layer index
         assert (len(self.uploaded_models) > 0)
 
         self.global_model = copy.deepcopy(self.uploaded_models[0])
         for param in self.global_model.parameters():
             param.data.zero_()
 
-        # for w, client_model in zip(self.uploaded_weights, self.uploaded_models):
-            # for layer in client_model parameters:
-                # if layer is existed in L2:
-                    # self.add_parameters(w, client_model)
-                # else:
-                    # pass
     def send_model_recon(self, layer):
         assert (len(self.clients) > 0)
 
@@ -467,11 +457,11 @@ class Server(object):
             client.send_time_cost['total_cost'] += 2 * (time.time() - start_time)
 
     def overwrite_grad(self, newgrad):
-        newgrad = newgrad * self.num_join_clients  # to match the sum loss
+        newgrad = newgrad * self.num_join_clients
         cnt = 0
         for name, param in self.network.named_parameters():
             beg = 0 if cnt == 0 else sum(self.grad_dims[:cnt])
             en = sum(self.grad_dims[:cnt + 1])
             this_grad = newgrad[beg: en].contiguous().view(param.data.size())
             param.grad = this_grad.data.clone()
-            cnt += 1
+            cnt += 1 
